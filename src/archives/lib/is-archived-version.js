@@ -1,7 +1,7 @@
 import patterns from '#src/frame/lib/patterns.js'
 import { deprecated } from '#src/versions/lib/enterprise-server-releases.js'
 
-export function isArchivedVersion(req) {
+export default function isArchivedVersion(req) {
   // if this is an assets path, use the referrer
   // if this is a docs path, use the req.path
   const pathToCheck = patterns.assetPaths.test(req.path) ? req.get('referrer') : req.path

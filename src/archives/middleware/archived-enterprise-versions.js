@@ -1,64 +1,51 @@
 import path from 'path'
-
-import type { Response, NextFunction } from 'express'
 import slash from 'slash'
-import got from 'got'
-
-import statsd from '@/observability/lib/statsd.js'
+import statsd from '#src/observability/lib/statsd.js'
 import {
   firstVersionDeprecatedOnNewSite,
   lastVersionWithoutArchivedRedirectsFile,
   deprecatedWithFunctionalRedirects,
   firstReleaseStoredInBlobStorage,
-} from '@/versions/lib/enterprise-server-releases.js'
-import patterns from '@/frame/lib/patterns.js'
-import versionSatisfiesRange from '@/versions/lib/version-satisfies-range.js'
-import { isArchivedVersion } from '@/archives/lib/is-archived-version.js'
+} from '#src/versions/lib/enterprise-server-releases.js'
+import patterns from '#src/frame/lib/patterns.js'
+import versionSatisfiesRange from '#src/versions/lib/version-satisfies-range.js'
+import isArchivedVersion from '#src/archives/lib/is-archived-version.js'
 import {
   setFastlySurrogateKey,
   SURROGATE_ENUMS,
-} from '@/frame/middleware/set-fastly-surrogate-key.js'
-import { readCompressedJsonFileFallbackLazily } from '@/frame/lib/read-json-file.js'
-import { archivedCacheControl, languageCacheControl } from '@/frame/middleware/cache-control.js'
-import { pathLanguagePrefixed, languagePrefixPathRegex } from '@/languages/lib/languages.js'
-import getRedirect, { splitPathByLanguage } from '@/redirects/lib/get-redirect.js'
-import getRemoteJSON from '@/frame/lib/get-remote-json.js'
-import { ExtendedRequest } from '@/types'
+} from '#src/frame/middleware/set-fastly-surrogate-key.js'
+import got from 'got'
+import { readCompressedJsonFileFallbackLazily } from '#src/frame/lib/read-json-file.js'
+import { archivedCacheControl, languageCacheControl } from '#src/frame/middleware/cache-control.js'
+import { pathLanguagePrefixed, languagePrefixPathRegex } from '#src/languages/lib/languages.js'
+import getRedirect, { splitPathByLanguage } from '#src/redirects/lib/get-redirect.js'
+import getRemoteJSON from '#src/frame/lib/get-remote-json.js'
 
 const REMOTE_ENTERPRISE_STORAGE_URL = 'https://githubdocs.azureedge.net/enterprise'
 
-function splitByLanguage(uri: string) {
+function splitByLanguage(uri) {
   let language = null
   let withoutLanguage = uri
-  const match = uri.match(languagePrefixPathRegex)
-  if (match) {
-    language = match[1]
+  if (languagePrefixPathRegex.test(uri)) {
+    language = uri.match(languagePrefixPathRegex)[1]
     withoutLanguage = uri.replace(languagePrefixPathRegex, '/')
   }
   return [language, withoutLanguage]
 }
 
-type ArchivedRedirects = {
-  [url: string]: string | null
-}
 // These files are huge so lazy-load them. But note that the
 // `readJsonFileLazily()` function will, at import-time, check that
 // the path does exist.
-const archivedRedirects: () => ArchivedRedirects = readCompressedJsonFileFallbackLazily(
+const archivedRedirects = readCompressedJsonFileFallbackLazily(
   './src/redirects/lib/static/archived-redirects-from-213-to-217.json',
 )
-
-type ArchivedFrontmatterURLs = {
-  [url: string]: string[]
-}
-const archivedFrontmatterValidURLS: () => ArchivedFrontmatterURLs =
-  readCompressedJsonFileFallbackLazily(
-    './src/redirects/lib/static/archived-frontmatter-valid-urls.json',
-  )
+const archivedFrontmatterValidURLS = readCompressedJsonFileFallbackLazily(
+  './src/redirects/lib/static/archived-frontmatter-valid-urls.json',
+)
 
 // Combine all the things you need to make sure the response is
 // aggressively cached.
-const cacheAggressively = (res: Response) => {
+const cacheAggressively = (res) => {
   archivedCacheControl(res)
 
   // This sets a custom Fastly surrogate key so that this response
@@ -95,13 +82,9 @@ const timeoutConfiguration = { response: 1500 }
 // This module handles requests for deprecated GitHub Enterprise versions
 // by routing them to static content in help-docs-archived-enterprise-versions
 
-export default async function archivedEnterpriseVersions(
-  req: ExtendedRequest,
-  res: Response,
-  next: NextFunction,
-) {
+export default async function archivedEnterpriseVersions(req, res, next) {
   const { isArchived, requestedVersion } = isArchivedVersion(req)
-  if (!isArchived || !requestedVersion) return next()
+  if (!isArchived) return next()
 
   // Skip asset paths
   if (patterns.assetPaths.test(req.path)) return next()
@@ -127,7 +110,6 @@ export default async function archivedEnterpriseVersions(
       // to time out.
       timeout: { response: 1000 },
     })
-    if (!req.context) throw new Error('No context on request')
     const [language, withoutLanguage] = splitPathByLanguage(req.path, req.context.userLanguage)
     const newRedirectTo = redirectJson[withoutLanguage]
     if (newRedirectTo && newRedirectTo !== withoutLanguage) {
@@ -159,7 +141,7 @@ export default async function archivedEnterpriseVersions(
     // `archivedRedirects` is a callable because it's a lazy function
     // and memoized so calling it is cheap.
 
-    const newPath = withoutLanguagePath && archivedRedirects()[withoutLanguagePath]
+    const newPath = archivedRedirects()[withoutLanguagePath]
     // Some entries in the lookup exists purely for the sake of injecting
     // language.
     // E.g. '/enterprise/2.15/user'
@@ -247,7 +229,7 @@ export default async function archivedEnterpriseVersions(
 // paths are slightly different depending on the version
 // for >=2.13: /2.13/en/enterprise/2.13/user/articles/viewing-contributions-on-your-profile
 // for <2.13: /2.12/user/articles/viewing-contributions-on-your-profile
-function getProxyPath(reqPath: string, requestedVersion: string) {
+function getProxyPath(reqPath, requestedVersion) {
   if (versionSatisfiesRange(requestedVersion, `>=${firstReleaseStoredInBlobStorage}`)) {
     const newReqPath = reqPath.includes('redirects.json') ? `/${reqPath}` : reqPath + '/index.html'
     return `${REMOTE_ENTERPRISE_STORAGE_URL}/${requestedVersion}${newReqPath}`
@@ -262,7 +244,7 @@ function getProxyPath(reqPath: string, requestedVersion: string) {
 // Get's populated lazily inside getFallbackRedirect().
 const fallbackRedirectLookups = new Map()
 
-function getFallbackRedirect(req: ExtendedRequest) {
+function getFallbackRedirect(req) {
   // The file `lib/redirects/static/archived-frontmatter-valid-urls.json` which
   // we depend on here, is structured like this:
   //
